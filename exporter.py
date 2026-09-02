@@ -25,7 +25,7 @@ class AudioExporter:
                               instrument_tracks: list[InstrumentTrack], audio_tracks: list,
                               drum_synth: DrumSynthesizer, melody_synth: MelodySynth):
         """
-        Renderiza todo o projeto offline e de forma assíncrona, somando e tratando canais
+        Renderiza  o projeto offline e de forma assíncrona, somando e tratando canais
         através de matrizes NumPy. Muito mais rápido do que gravação em tempo real.
         """
         num_steps = 16

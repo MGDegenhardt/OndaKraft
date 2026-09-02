@@ -16,7 +16,7 @@ class AudioPlugin(ABC):
     @abstractmethod
     def process(self, wave: np.ndarray) -> np.ndarray:
         """
-        Método obrigatório que processa a matriz NumPy de áudio e retorna a onda modificada.
+        Metodo obrigatório que processa a matriz NumPy de áudio e retorna a onda modificada.
         """
         pass
 

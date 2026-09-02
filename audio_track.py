@@ -25,7 +25,7 @@ class AudioTrack:
     @classmethod
     def from_file(cls, path: str) -> 'AudioTrack':
         """
-        Factory Method (Método de Fábrica).
+        Aqui temos 'Factory Method' (Metodo de Fabrica).
         Carrega o arquivo de áudio do disco rígido, extrai e normaliza
         a forma de onda usando o NumPy e instancia o objeto de forma limpa [1].
         """
