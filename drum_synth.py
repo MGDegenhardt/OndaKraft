@@ -2,7 +2,7 @@ import numpy as np
 
 
     # Desenvolvimento de sintetizador de bateria baseado em equações matemáticas e processamento de sinal
-    # MGDegenhardt, 2025 - OndaKraft (baseado no JRYBeats)
+    # MGDegenhardt, 2026 - OndaKraft (baseado no JRYBeats)
 
 class DrumSynthesizer:
     def __init__(self, sample_rate: int = 44100):

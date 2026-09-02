@@ -1,6 +1,6 @@
 import numpy as np
     # Desenvolvimento de sintetizador de 'melody_synth' baseado em equações matemáticas e processamento de sinal
-    # MGDegenhardt, 2025 - OndaKraft (baseado no JRYBeats)
+    # MGDegenhardt, 2026 - OndaKraft (baseado no JRYBeats)
 
 class Note:
     def __init__(self, pitch: str, instrument: str, duration_steps: int = 1, velocity: float = 1.0):
