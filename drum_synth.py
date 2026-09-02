@@ -6,20 +6,11 @@ import numpy as np
 
 class DrumSynthesizer:
     def __init__(self, sample_rate: int = 44100):
-        """
-        Sintetizador matemático de bateria do OndaKraft.
-        Gera as formas de onda brutas dos instrumentos percussivos usando equações matemáticas
-        e processamento de sinal do NumPy, retornando arrays 1D normalizados.
-        """
         self.sample_rate = sample_rate
 
     def eq_noise(self, noise: np.ndarray, low_cut: float = 0, high_cut: float = None,
                  peak_freq: float = None, peak_gain: float = 0.0) -> np.ndarray:
-        """
-        Filtro de equalização espectral usando a Transformada Rápida de Fourier (FFT) [3].
-        Permite lapidar o ruído de caixas, chimbais e palmas cortando graves/agudos
-        e acentuando frequências específicas (curva em sino) [3, 4].
-        """
+        """Filtro de equalização espectral usando FFT [6]."""
         spectrum = np.fft.rfft(noise)
         frequencies = np.fft.rfftfreq(len(noise), 1 / self.sample_rate)
         shape = np.ones_like(frequencies)
@@ -41,11 +32,7 @@ class DrumSynthesizer:
         return filtered
 
     def generate_kick(self) -> np.ndarray:
-        """
-        Gera a forma de onda de um bumbo (Kick) [5].
-        Aplica uma queda rápida de frequência exponencial para dar o impacto (thump) [2, 5]
-        e adiciona um sutil 'click' de ruído no ataque para definição [5].
-        """
+        """Gera bumbo com queda rápida exponencial [7]."""
         duration = 0.5
         t = np.linspace(0, duration, int(self.sample_rate * duration), endpoint=False)
         frequency = 50 + 210 * np.exp(-35 * t)
@@ -62,15 +49,10 @@ class DrumSynthesizer:
         return kick_wave
 
     def generate_snare(self) -> np.ndarray:
-        """
-        Gera a forma de onda de uma caixa (Snare) [4].
-        Mescla um sinal harmônico senoidal (corpo da caixa a 185Hz e 330Hz) [4]
-        com ruído branco filtrado por FFT e um ataque rápido e brilhante [4, 6].
-        """
+        """Gera caixa usando ruído filtrado por FFT [8]."""
         snare_duration = 0.32
         snare_t = np.linspace(0, snare_duration, int(self.sample_rate * snare_duration), endpoint=False)
 
-        # Ruído lapidado espectralmente
         snare_noise = np.random.uniform(-1, 1, len(snare_t))
         snare_noise = self.eq_noise(snare_noise, low_cut=550, high_cut=9500, peak_freq=2400, peak_gain=1.2)
 
@@ -80,7 +62,6 @@ class DrumSynthesizer:
         noise_envelope = np.exp(-13 * snare_t)
         body_envelope = np.exp(-18 * snare_t)
 
-        # Ataque rápido metálico
         snare_attack = np.random.uniform(-1, 1, len(snare_t))
         snare_attack = self.eq_noise(snare_attack, low_cut=1800, high_cut=12000, peak_freq=4500, peak_gain=0.8)
         snare_attack *= np.exp(-90 * snare_t)
@@ -90,11 +71,7 @@ class DrumSynthesizer:
         return snare_wave
 
     def generate_hihat(self) -> np.ndarray:
-        """
-        Gera a forma de onda de um chimbau fechado (Hi-Hat) [4].
-        Consiste em ruído de alta frequência com decaimento exponencial curtíssimo [4, 6],
-        mesclado a frequências metálicas puras simulando ressonância física [4].
-        """
+        """Gera chimbau de alta frequência e textura metálica [8]."""
         hihat_duration = 0.1
         hihat_t = np.linspace(0, hihat_duration, int(self.sample_rate * hihat_duration), endpoint=False)
 
@@ -104,16 +81,12 @@ class DrumSynthesizer:
         hihat_envelope = np.exp(-48 * hihat_t)
         hihat_wave = hihat_noise * hihat_envelope * 0.48
 
-        # Inserção de frequências ressonantes metálicas discretas
         for metallic_frequency in (6400, 7900, 10100, 12400):
             hihat_wave += np.sin(2 * np.pi * metallic_frequency * hihat_t) * np.exp(-55 * hihat_t) * 0.025
         return hihat_wave
 
     def generate_perc(self) -> np.ndarray:
-        """
-        Gera uma percussão leve e sutil (estilo maracá) [4, 6].
-        Ruído branco puro com atenuação rápida de volume para sentar atrás do mix [4, 6].
-        """
+        """Gera maracá curto [8]."""
         perc_duration = 0.12
         perc_t = np.linspace(0, perc_duration, int(self.sample_rate * perc_duration), endpoint=False)
         perc_noise = np.random.uniform(-1, 1, len(perc_t))
@@ -121,11 +94,7 @@ class DrumSynthesizer:
         return perc_wave
 
     def generate_clap(self) -> np.ndarray:
-        """
-        Gera a forma de onda de palmas (Clap) [7].
-        Simula a acústica de palmas humanas sequenciando dois picos de impacto rápidos (bursts)
-        antes de uma cauda mais longa com textura de ruído lapidada por FFT [7].
-        """
+        """Gera palmas acústicas com micro-impactos [9]."""
         clap_duration = 0.42
         clap_t = np.linspace(0, clap_duration, int(self.sample_rate * clap_duration), endpoint=False)
 

@@ -1,4 +1,5 @@
 import numpy as np
+
     # Desenvolvimento de sintetizador de 'melody_synth' baseado em equações matemáticas e processamento de sinal
     # MGDegenhardt, 2026 - OndaKraft (baseado no JRYBeats)
 
@@ -8,7 +9,7 @@ class Note:
         Representa uma nota musical no Piano Roll do OndaKraft com propriedades expressivas.
 
         :param pitch: Nome da nota e oitava (ex: 'C4', 'F#3')
-        :param instrument: O sintetizador associado (ex: 'SOFT', 'PLUCK', 'BASS', 'GUITAR', 'BRIGHT_SYNTH')
+        :param instrument: O sintetizador associado (ex: 'SOFT', 'PLUCK', 'BASS', 'KEYS', 'GUITAR', 'BRIGHT_SYNTH')
         :param duration_steps: Quantos passos (quadrados) de sequenciador a nota dura (padrão: 1)
         :param velocity: A força/volume individual da nota (0.0 a 1.0)
         """
@@ -36,7 +37,7 @@ class MelodySynth:
             note_name = note[:2]
             octave = int(note[2:])
         else:
-            note_name = note
+            note_name = note[0]
             octave = int(note[1:])
         return 12 * (octave + 1) + self.note_names.index(note_name)
 

@@ -8,6 +8,7 @@ from tkinter import filedialog
 import numpy as np
 import pygame
 import pygame.sndarray
+from plugin_loader import PluginLoader
 
 # Desenvolvimento do controlador principal do app
 # MGDegenhardt, 2026 - OndaKraft (baseado no JRYBeats)
@@ -153,7 +154,7 @@ class OndaKraftApp:
         Gerencia telas, eventos Pygame, inicialização de áudio, gravação e persistência.
         """
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption('OndaKraft DAW - Criado com Python & NumPy')
+        pygame.display.set_caption('OndaKraft DAW')
         self.clock = pygame.time.Clock()
 
         # Parâmetros Globais do Sequenciador
@@ -172,6 +173,8 @@ class OndaKraftApp:
         self.melody_synth = MelodySynth()
         self.sequencer = Sequencer()
         self.exporter = AudioExporter()
+        self.plugin_loader = PluginLoader("plugins")
+        self.discovered_plugins = self.plugin_loader.discover_and_load()
 
         # Carrega Sons de Bateria Físicos na Memória do Pygame
         self.drum_sounds_map = {
@@ -188,10 +191,17 @@ class OndaKraftApp:
         self.drum_tracks = []
         for name in self.drum_tracks_names:
             mixer_ch = MixerChannel(name=name, volume=0.85)
-            # Adiciona DelayPlugin padrão (desabilitado inicialmente)
+
+            # 1. Adiciona o Delay padrão
             delay = DelayPlugin(delay_time=0.25, feedback=0.4, mix=0.3)
             delay.enabled = False
             mixer_ch.add_plugin(delay)
+
+            # 2. Injeta dinamicamente todos os outros plugins encontrados na pasta!
+            for plugin_class in self.discovered_plugins:
+                novo_plugin = plugin_class()
+                novo_plugin.enabled = False  # Começam desligados (bypass)
+                mixer_ch.add_plugin(novo_plugin)
 
             self.drum_tracks.append({
                 'name': name,
@@ -204,11 +214,17 @@ class OndaKraftApp:
         self.melody_instrument = 'SOFT'
 
         # Inicializa a Pista Melódica Principal
+        # Inicializa a Pista Melódica Principal
         self.melody_track = InstrumentTrack("Melodia", self.melody_instrument)
-        # Adiciona DelayPlugin padrão ao canal melódico
         melody_delay = DelayPlugin(delay_time=0.33, feedback=0.35, mix=0.25)
         melody_delay.enabled = False
         self.melody_track.mixer_channel.add_plugin(melody_delay)
+
+        # Injeta os novos efeitos dinâmicos na trilha de piano
+        for plugin_class in self.discovered_plugins:
+            novo_plugin = plugin_class()
+            novo_plugin.enabled = False
+            self.melody_track.mixer_channel.add_plugin(novo_plugin)
 
         self.instrument_tracks = [self.melody_track]
 
@@ -225,8 +241,8 @@ class OndaKraftApp:
         # Abas de Navegação
         self.sequencer_tab_rect = pygame.Rect(35, 150, 120, 40)
         self.piano_tab_rect = pygame.Rect(185, 150, 130, 40)
-        self.audio_tab_rect = pygame.Rect(335, 150, 90, 40)
-        self.mixer_tab_rect = pygame.Rect(445, 150, 90, 40)
+        self.audio_tab_rect = pygame.Rect(335, 150, 180, 40)
+        self.mixer_tab_rect = pygame.Rect(545, 150, 80, 40)
 
         # Ações de Projeto / Arquivos
         self.save_project_rect = pygame.Rect(805, 153, 72, 32)
@@ -281,11 +297,11 @@ class OndaKraftApp:
     def discover_microphones(self):
         """Mapeia os microfones disponíveis no sistema operacional."""
         try:
-            self.microphone_devices = [ \
-                (idx, dev['name']) for idx, dev in enumerate(sd.query_devices()) \
-                if dev['max_input_channels'] > 0 \
-                ]
-            default_input = sd.default.device
+            self.microphone_devices = [
+                (idx, dev['name']) for idx, dev in enumerate(sd.query_devices())
+                if dev['max_input_channels'] > 0
+            ]
+            default_input = sd.default.device[0]
             for pos, (idx, name) in enumerate(self.microphone_devices):
                 if idx == default_input:
                     self.selected_microphone_position = pos
@@ -383,10 +399,10 @@ class OndaKraftApp:
         root.withdraw()
         root.attributes('-topmost', True)
         path = filedialog.askopenfilename(
-            title='Importar Áudio para OndaKraft', \
+            title='Importar Áudio para OndaKraft',
             filetypes=[('Arquivos de Áudio', '*.wav *.mp3 *.ogg'), ('WAV', '*.wav'), ('MP3', '*.mp3'), ('OGG', '*.ogg'),
-                       ('Todos', '*.*')] \
-            )
+                       ('Todos', '*.*')]
+        )
         root.destroy()
         if path:
             self.import_audio_track(path)
@@ -411,10 +427,10 @@ class OndaKraftApp:
         root.withdraw()
         root.attributes('-topmost', True)
         path = filedialog.asksaveasfilename(
-            title='Salvar Projeto OndaKraft', \
-            defaultextension='.jry', \
-            filetypes=[('Projeto OndaKraft', '*.jry'), ('JSON', '*.json')] \
-            )
+            title='Salvar Projeto OndaKraft',
+            defaultextension='.jry',
+            filetypes=[('Projeto OndaKraft', '*.jry'), ('JSON', '*.json')]
+        )
         root.destroy()
         if not path:
             return
@@ -450,7 +466,7 @@ class OndaKraftApp:
                 'muted': t['mixer_channel'].muted,
                 'solo': t['mixer_channel'].solo,
                 'pan': t['mixer_channel'].pan,
-                'delay_enabled': t['mixer_channel'].effects_chain.enabled
+                'delay_enabled': t['mixer_channel'].effects_chain[0].enabled
             } for t in self.drum_tracks],
             # Melodia
             'melody_pattern': melody_pattern_serialized,
@@ -459,7 +475,7 @@ class OndaKraftApp:
                 'muted': self.melody_track.mixer_channel.muted,
                 'solo': self.melody_track.mixer_channel.solo,
                 'pan': self.melody_track.mixer_channel.pan,
-                'delay_enabled': self.melody_track.mixer_channel.effects_chain.enabled
+                'delay_enabled': self.melody_track.mixer_channel.effects_chain[0].enabled
             },
             # Trilhas de Áudio Externas
             'audio_tracks': [{
@@ -489,9 +505,9 @@ class OndaKraftApp:
         root.withdraw()
         root.attributes('-topmost', True)
         path = filedialog.askopenfilename(
-            title='Carregar Projeto OndaKraft', \
-            filetypes=[('Projeto OndaKraft', '*.jry'), ('JSON', '*.json'), ('Todos os arquivos', '*.*')] \
-            )
+            title='Carregar Projeto OndaKraft',
+            filetypes=[('Projeto OndaKraft', '*.jry'), ('JSON', '*.json'), ('Todos os arquivos', '*.*')]
+        )
         root.destroy()
         if not path:
             return
@@ -522,7 +538,7 @@ class OndaKraftApp:
                     track['mixer_channel'].solo = mix.get('solo', False)
                     track['mixer_channel'].pan = mix.get('pan', 0.0)
                     if 'delay_enabled' in mix and len(track['mixer_channel'].effects_chain) > 0:
-                        track['mixer_channel'].effects_chain.enabled = mix['delay_enabled']
+                        track['mixer_channel'].effects_chain[0].enabled = mix['delay_enabled']
 
             # Carrega Melodia (Instrument Track)
             self.melody_track = InstrumentTrack("Melodia", self.melody_instrument)
@@ -536,7 +552,7 @@ class OndaKraftApp:
             self.melody_track.mixer_channel.solo = loaded_melody_mixer.get('solo', False)
             self.melody_track.mixer_channel.pan = loaded_melody_mixer.get('pan', 0.0)
             if 'delay_enabled' in loaded_melody_mixer:
-                self.melody_track.mixer_channel.effects_chain.enabled = loaded_melody_mixer['delay_enabled']
+                self.melody_track.mixer_channel.effects_chain[0].enabled = loaded_melody_mixer['delay_enabled']
 
             loaded_melody_pattern = state.get('melody_pattern', [])
             piano_notes = get_piano_notes()
@@ -596,10 +612,10 @@ class OndaKraftApp:
         root.withdraw()
         root.attributes('-topmost', True)
         path = filedialog.asksaveasfilename(
-            title='Exportar Música como WAV', \
-            defaultextension='.wav', \
-            filetypes=[('Áudio WAV sem perdas', '*.wav')] \
-            )
+            title='Exportar Música como WAV',
+            defaultextension='.wav',
+            filetypes=[('Áudio WAV sem perdas', '*.wav')]
+        )
         root.destroy()
         if not path:
             return
@@ -631,7 +647,6 @@ class OndaKraftApp:
     def handle_pygame_events(self) -> bool:
         """Loop de captação de eventos de teclado, mouse, drag & drop e timeline."""
         now = pygame.time.get_ticks()
-        mouse_pos = pygame.mouse.get_pos()
         piano_notes = get_piano_notes()
 
         for event in pygame.event.get():
@@ -668,8 +683,10 @@ class OndaKraftApp:
                     self.bpm = min(self.max_bpm, self.bpm + 5)
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                click_x, click_y = event.pos
+
                 # Cliques em Botões do Cabeçalho
-                if self.play_rect.collidepoint(event.pos):
+                if self.play_rect.collidepoint(click_x, click_y):
                     if not self.playing:
                         self.playing = True
                         self.current_step = 0
@@ -679,46 +696,47 @@ class OndaKraftApp:
                         )
                         step_interval = 60000 / self.bpm / 4
                         self.next_step_time = now + step_interval
-                elif self.stop_rect.collidepoint(event.pos):
+                elif self.stop_rect.collidepoint(click_x, click_y):
                     self.playing = False
                     self.current_step = 0
                     pygame.mixer.stop()
-                elif self.bpm_minus_rect.collidepoint(event.pos):
+                elif self.bpm_minus_rect.collidepoint(click_x, click_y):
                     self.bpm = max(self.min_bpm, self.bpm - 5)
-                elif self.bpm_plus_rect.collidepoint(event.pos):
+                elif self.bpm_plus_rect.collidepoint(click_x, click_y):
                     self.bpm = min(self.max_bpm, self.bpm + 5)
 
                 # Cliques nas Abas de Navegação
-                elif self.sequencer_tab_rect.collidepoint(event.pos):
+                elif self.sequencer_tab_rect.collidepoint(click_x, click_y):
                     self.current_view = 'SEQUENCER'
-                elif self.piano_tab_rect.collidepoint(event.pos):
+                elif self.piano_tab_rect.collidepoint(click_x, click_y):
                     self.current_view = 'PIANO'
-                elif self.audio_tab_rect.collidepoint(event.pos):
+                elif self.audio_tab_rect.collidepoint(click_x, click_y):
                     self.current_view = 'AUDIO'
-                elif self.mixer_tab_rect.collidepoint(event.pos):
+                elif self.mixer_tab_rect.collidepoint(click_x, click_y):
                     self.current_view = 'MIXER'
 
                 # Ações de Salvamento, Carregamento e Exportação
-                elif self.save_project_rect.collidepoint(event.pos):
+                elif self.save_project_rect.collidepoint(click_x, click_y):
                     self.save_project_to_json()
-                elif self.load_project_rect.collidepoint(event.pos):
+                elif self.load_project_rect.collidepoint(click_x, click_y):
                     self.load_project_from_json()
-                elif self.export_project_rect.collidepoint(event.pos):
+                elif self.export_project_rect.collidepoint(click_x, click_y):
                     self.export_wav()
 
                 # Eventos de Áudio Externo
-                elif self.current_view == 'AUDIO' and self.mic_prev_rect.collidepoint(event.pos):
+                elif self.current_view == 'AUDIO' and self.mic_prev_rect.collidepoint(click_x, click_y):
                     if self.microphone_devices and (not self.recording_microphone):
                         self.selected_microphone_position = (self.selected_microphone_position - 1) % len(
                             self.microphone_devices)
                 elif self.current_view == 'AUDIO' and (
-                        self.mic_next_rect.collidepoint(event.pos) or self.mic_device_rect.collidepoint(event.pos)):
+                        self.mic_next_rect.collidepoint(click_x, click_y) or self.mic_device_rect.collidepoint(click_x,
+                                                                                                               click_y)):
                     if self.microphone_devices and (not self.recording_microphone):
                         self.selected_microphone_position = (self.selected_microphone_position + 1) % len(
                             self.microphone_devices)
-                elif self.current_view == 'AUDIO' and self.import_audio_rect.collidepoint(event.pos):
+                elif self.current_view == 'AUDIO' and self.import_audio_rect.collidepoint(click_x, click_y):
                     self.choose_and_import_file()
-                elif self.current_view == 'AUDIO' and self.record_audio_rect.collidepoint(event.pos):
+                elif self.current_view == 'AUDIO' and self.record_audio_rect.collidepoint(click_x, click_y):
                     if self.recording_microphone:
                         self.stop_microphone_recording()
                     else:
@@ -731,7 +749,7 @@ class OndaKraftApp:
                         for step in range(16):
                             x = self.sequencer_start_x + step * (self.step_size + self.step_gap)
                             rect = pygame.Rect(x, y + 16, self.step_size, self.step_size)
-                            if rect.collidepoint(event.pos):
+                            if rect.collidepoint(click_x, click_y):
                                 track['pattern'][step] = not track['pattern'][step]
                                 if track['pattern'][step]:
                                     sound_key = track['name']
@@ -750,7 +768,7 @@ class OndaKraftApp:
 
                         # Clicar na Tecla Virtual do Piano (Toca uma prévia rápida)
                         key_rect = pygame.Rect(20, y, 100, self.piano_row_height)
-                        if key_rect.collidepoint(event.pos):
+                        if key_rect.collidepoint(click_x, click_y):
                             preview_note = Note(pitch=note_name, instrument=self.melody_instrument)
                             preview_wave = self.melody_synth.create_dynamic_wave(preview_note, self.bpm)
                             self.play_sound_from_mixer(make_sound(preview_wave), self.melody_track.mixer_channel)
@@ -761,7 +779,7 @@ class OndaKraftApp:
                         for step in range(16):
                             x = self.piano_grid_start_x + step * self.piano_step_width
                             cell_rect = pygame.Rect(x, y, self.piano_step_width, self.piano_row_height)
-                            if cell_rect.collidepoint(event.pos):
+                            if cell_rect.collidepoint(click_x, click_y):
                                 current_note = self.melody_track.pattern[note_index][step]
                                 if current_note is not None and current_note.instrument == self.melody_instrument:
                                     self.melody_track.clear_note_at(note_index, step)
@@ -781,7 +799,7 @@ class OndaKraftApp:
                         instrument_y = 585
                         for idx, inst_name in enumerate(self.instruments):
                             rect = pygame.Rect(130 + idx * 100, instrument_y, 85, 30)
-                            if rect.collidepoint(event.pos):
+                            if rect.collidepoint(click_x, click_y):
                                 self.melody_instrument = inst_name
                                 self.melody_track.instrument_type = inst_name
                                 break
@@ -810,24 +828,24 @@ class OndaKraftApp:
                         # Botão de Ativação do Plugin Delay (FX)
                         delay_rect = pygame.Rect(x + 12, strip_top + 58, 76, 20)
 
-                        if mute_rect.collidepoint(event.pos):
+                        if mute_rect.collidepoint(click_x, click_y):
                             channel.muted = not channel.muted
                             break
-                        elif solo_rect.collidepoint(event.pos):
+                        elif solo_rect.collidepoint(click_x, click_y):
                             channel.solo = not channel.solo
                             break
-                        elif delay_rect.collidepoint(event.pos):
+                        elif delay_rect.collidepoint(click_x, click_y):
                             if len(channel.effects_chain) > 0:
-                                channel.effects_chain.enabled = not channel.effects_chain.enabled
+                                channel.effects_chain[0].enabled = not channel.effects_chain[0].enabled
                             break
-                        elif volume_rect.inflate(18, 0).collidepoint(event.pos):
+                        elif volume_rect.inflate(18, 0).collidepoint(click_x, click_y):
                             self.mixer_drag = (channel, 'volume', volume_rect)
-                            ratio = (volume_rect.bottom - event.pos[3]) / volume_rect.height
+                            ratio = (volume_rect.bottom - click_y) / volume_rect.height
                             channel.volume = max(0.0, min(1.0, ratio))
                             break
-                        elif pan_rect.inflate(0, 10).collidepoint(event.pos):
+                        elif pan_rect.inflate(0, 10).collidepoint(click_x, click_y):
                             self.mixer_drag = (channel, 'pan', pan_rect)
-                            ratio = (event.pos - pan_rect.left) / pan_rect.width
+                            ratio = (click_x - pan_rect.left) / pan_rect.width
                             channel.pan = max(-1.0, min(1.0, ratio * 2.0 - 1.0))
                             break
 
@@ -844,13 +862,13 @@ class OndaKraftApp:
                         clip_x = 210 + int(track.start_step / 16 * 740)
                         clip_rect = pygame.Rect(clip_x, y + 10, clip_width, 48)
 
-                        if mute_rect.collidepoint(event.pos):
+                        if mute_rect.collidepoint(click_x, click_y):
                             track.mixer_channel.muted = not track.mixer_channel.muted
                             break
-                        elif delete_rect.collidepoint(event.pos):
+                        elif delete_rect.collidepoint(click_x, click_y):
                             del self.audio_tracks[index]
                             break
-                        elif clip_rect.collidepoint(event.pos):
+                        elif clip_rect.collidepoint(click_x, click_y):
                             self.dragging_audio = index
                             break
 
@@ -859,17 +877,18 @@ class OndaKraftApp:
                 self.mixer_drag = None
 
             elif event.type == pygame.MOUSEMOTION:
+                motion_x, motion_y = event.pos
                 if self.mixer_drag is not None:
                     channel, control_type, control_rect = self.mixer_drag
                     if control_type == 'volume':
-                        ratio = (control_rect.bottom - event.pos[3]) / control_rect.height
+                        ratio = (control_rect.bottom - motion_y) / control_rect.height
                         channel.volume = max(0.0, min(1.0, ratio))
                     elif control_type == 'pan':
-                        ratio = (event.pos - control_rect.left) / control_rect.width
+                        ratio = (motion_x - control_rect.left) / control_rect.width
                         channel.pan = max(-1.0, min(1.0, ratio * 2.0 - 1.0))
 
                 elif self.dragging_audio is not None and self.dragging_audio < len(self.audio_tracks):
-                    relative_x = event.pos - 210
+                    relative_x = motion_x - 210
                     ratio = relative_x / 740
                     ratio = max(0, min(0.999, ratio))
                     new_step = int(ratio * 16)
@@ -885,7 +904,7 @@ class OndaKraftApp:
                 if self.current_step >= 16:
                     self.current_step = 0
 
-                # Dispara os sons correspondentes ao passo atual
+                # Despara os sons correspondentes ao passo atual
                 self.sequencer.play_step(
                     self.current_step, self.bpm, self.drum_tracks, self.instrument_tracks,
                     self.audio_tracks, self.drum_sounds_map, self.melody_synth, self.get_all_channels()
@@ -977,7 +996,7 @@ class OndaKraftApp:
 
         pygame.draw.line(self.screen, LINE_COLOR, (0, 198), (WIDTH, 198), 1)
 
-        # ------------------- VIEW: SEQUENCER (BATERIA) -------------------\
+        # ------------------- VIEW: SEQUENCER (BATERIA) -------------------
         if self.current_view == 'SEQUENCER':
             # Numeração dos passos (1 a 16)
             for step in range(16):
@@ -1018,7 +1037,7 @@ class OndaKraftApp:
                     pygame.draw.rect(self.screen, cell_color, rect)
                     pygame.draw.rect(self.screen, LINE_COLOR, rect, 2)
 
-        # ------------------- VIEW: PIANO ROLL (MELODIA) -------------------\
+        # ------------------- VIEW: PIANO ROLL (MELODIA) -------------------
         elif self.current_view == 'PIANO':
             # Numeração dos passos na grade melódica
             for step in range(16):
@@ -1086,7 +1105,7 @@ class OndaKraftApp:
                 inst_lbl = tiny_font.render(inst_name, True, text_color)
                 self.screen.blit(inst_lbl, inst_lbl.get_rect(center=rect.center))
 
-        # ------------------- VIEW: AUDIO TIMELINE (SAMPLES) -------------------\
+        # ------------------- VIEW: AUDIO TIMELINE (SAMPLES) -------------------
         elif self.current_view == 'AUDIO':
             # Seletor de Microfone Integrado
             pygame.draw.rect(self.screen, BUTTON_BACKGROUND, self.mic_prev_rect)
@@ -1103,10 +1122,11 @@ class OndaKraftApp:
 
             _, active_mic_name = self.get_selected_microphone()
             # Corta nomes muito compridos para caber na caixa
-            while tiny_font.size('MIC: ' + active_mic_name) > self.mic_device_rect.width - 18 and len(
-                    active_mic_name) > 4:
+            mic_w, _ = tiny_font.size('MIC: ' + active_mic_name)
+            while mic_w > self.mic_device_rect.width - 18 and len(active_mic_name) > 4:
                 active_mic_name = active_mic_name[:-1]
-            if active_mic_name != self.get_selected_microphone()[3]:
+                mic_w, _ = tiny_font.size('MIC: ' + active_mic_name)
+            if active_mic_name != self.get_selected_microphone()[1]:
                 active_mic_name = active_mic_name[:-3] + '...'
 
             mic_text_surf = tiny_font.render('MIC: ' + active_mic_name, True, TEXT_COLOR)
@@ -1182,7 +1202,7 @@ class OndaKraftApp:
                 # Chama a renderização do NumPy encapsulada dentro do AudioTrack
                 track.draw_waveform(self.screen, clip_rect.inflate(-6, -6), ORANGE)
 
-        # ------------------- VIEW: MIXER (CONSOLES) -------------------\
+        # ------------------- VIEW: MIXER (CONSOLES) -------------------
         elif self.current_view == 'MIXER':
             mixer_tracks = []
             for track in self.drum_tracks:
@@ -1228,7 +1248,7 @@ class OndaKraftApp:
 
                 # Botão Delay (FX) em cada canal da Mesa
                 delay_rect = pygame.Rect(x + 12, strip_top + 58, 76, 20)
-                delay_active = len(channel.effects_chain) > 0 and channel.effects_chain.enabled
+                delay_active = len(channel.effects_chain) > 0 and channel.effects_chain[0].enabled
                 delay_color = PURPLE if delay_active else BUTTON_BACKGROUND
                 delay_txt_color = (255, 255, 255) if delay_active else SECONDARY_TEXT
 
