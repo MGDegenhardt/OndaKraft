@@ -1,3 +1,4 @@
+
 import os
 import sys
 import time
@@ -8,7 +9,6 @@ from tkinter import filedialog
 import numpy as np
 import pygame
 import pygame.sndarray
-from plugin_loader import PluginLoader
 
 # Desenvolvimento do controlador principal do app
 # MGDegenhardt, 2026 - OndaKraft (baseado no JRYBeats)
@@ -19,7 +19,108 @@ from melody_synth import MelodySynth, Note
 from audio_track import AudioTrack
 from sequencer import Sequencer, InstrumentTrack, get_piano_notes
 from mixer import MixerChannel
-from plugins import DelayPlugin
+from plugin_loader import PluginLoader
+
+# Garante que a pasta 'plugins' e a pasta atual estejam no sys.path para importação direta de submódulos
+import sys
+import os
+
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+_plugins_dir = os.path.join(_current_dir, "plugins")
+if os.path.exists(_plugins_dir) and _plugins_dir not in sys.path:
+    sys.path.insert(0, _plugins_dir)
+
+# Importando os plugins de forma segura com fallback de bypass
+try:
+    from plugins import DelayPlugin
+except ImportError:
+    class DelayPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Delay"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.tremolo import TremoloPlugin
+    except ImportError:
+        from tremolo import TremoloPlugin
+except ImportError:
+    class TremoloPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Tremolo"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.distortion import DistortionPlugin
+    except ImportError:
+        from distortion import DistortionPlugin
+except ImportError:
+    class DistortionPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Distortion"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.reverb import ReverbPlugin
+    except ImportError:
+        from reverb import ReverbPlugin
+except ImportError:
+    class ReverbPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Reverb"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.eq import EQPlugin
+    except ImportError:
+        from eq import EQPlugin
+except ImportError:
+    class EQPlugin:
+        def __init__(self, **kwargs):
+            self.name = "EQ"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.compressor import CompressorPlugin
+    except ImportError:
+        from compressor import CompressorPlugin
+except ImportError:
+    class CompressorPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Compressor"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
+try:
+    try:
+        from plugins.chorus import ChorusPlugin
+    except ImportError:
+        from chorus import ChorusPlugin
+except ImportError:
+    class ChorusPlugin:
+        def __init__(self, **kwargs):
+            self.name = "Chorus"
+            self.enabled = False
+
+        def process(self, wave): return wave
+
 from exporter import AudioExporter
 
 # Tentativa de importação do SoundDevice para gravação segura do microfone
@@ -147,6 +248,51 @@ microphone_image = create_microphone_icon()
 drum_images = [kick_image, snare_image, hihat_image, clap_image, perc_image]
 
 
+def init_channel_fx(channel):
+    """Inicializa os 8 slots de efeitos padrão para um canal do mixer."""
+    channel.effects_chain.clear()
+
+    p_delay = DelayPlugin()
+    p_delay.enabled = False
+    channel.add_plugin(p_delay)
+
+    p_tremolo = TremoloPlugin()
+    p_tremolo.enabled = False
+    channel.add_plugin(p_tremolo)
+
+    p_dist = DistortionPlugin()
+    p_dist.enabled = False
+    channel.add_plugin(p_dist)
+
+    p_reverb = ReverbPlugin()
+    p_reverb.enabled = False
+    channel.add_plugin(p_reverb)
+
+    p_eq = EQPlugin()
+    p_eq.enabled = False
+    channel.add_plugin(p_eq)
+
+    p_comp = CompressorPlugin()
+    p_comp.enabled = False
+    channel.add_plugin(p_comp)
+
+    p_chorus = ChorusPlugin()
+    p_chorus.enabled = False
+    channel.add_plugin(p_chorus)
+
+    # Slot 8: customizado / dinâmico (inicialmente vazio)
+    class CustomSlotPlugin:
+        def __init__(self):
+            self.name = ""
+            self.enabled = False
+
+        def process(self, wave):
+            return wave
+
+    p_custom = CustomSlotPlugin()
+    channel.add_plugin(p_custom)
+
+
 class OndaKraftApp:
     def __init__(self):
         """
@@ -154,7 +300,7 @@ class OndaKraftApp:
         Gerencia telas, eventos Pygame, inicialização de áudio, gravação e persistência.
         """
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption('OndaKraft DAW')
+        pygame.display.set_caption('OndaKraft DAW - Criado com Python & NumPy')
         self.clock = pygame.time.Clock()
 
         # Parâmetros Globais do Sequenciador
@@ -173,16 +319,29 @@ class OndaKraftApp:
         self.melody_synth = MelodySynth()
         self.sequencer = Sequencer()
         self.exporter = AudioExporter()
+
         self.plugin_loader = PluginLoader("plugins")
         self.discovered_plugins = self.plugin_loader.discover_and_load()
 
         # Carrega Sons de Bateria Físicos na Memória do Pygame
+        # Carrega Sons de Bateria Físicos na Memória do Pygame e guarda ondas cruas para efeitos em tempo real
+        kick_raw = self.drum_synth.generate_kick()
+        snare_raw = self.drum_synth.generate_snare()
+        hihat_raw = self.drum_synth.generate_hihat()
+        clap_raw = self.drum_synth.generate_clap()
+        perc_raw = self.drum_synth.generate_perc()
+
         self.drum_sounds_map = {
-            'KICK': make_sound(self.drum_synth.generate_kick()),
-            'SNARE': make_sound(self.drum_synth.generate_snare()),
-            'HI-HAT': make_sound(self.drum_synth.generate_hihat()),
-            'CLAP': make_sound(self.drum_synth.generate_clap()),
-            'PERC': make_sound(self.drum_synth.generate_perc())
+            'KICK': make_sound(kick_raw),
+            'KICK_WAVE': kick_raw,
+            'SNARE': make_sound(snare_raw),
+            'SNARE_WAVE': snare_raw,
+            'HI-HAT': make_sound(hihat_raw),
+            'HI-HAT_WAVE': hihat_raw,
+            'CLAP': make_sound(clap_raw),
+            'CLAP_WAVE': clap_raw,
+            'PERC': make_sound(perc_raw),
+            'PERC_WAVE': perc_raw
         }
 
         # Inicializa Estruturas de Trilha (Model)
@@ -191,17 +350,7 @@ class OndaKraftApp:
         self.drum_tracks = []
         for name in self.drum_tracks_names:
             mixer_ch = MixerChannel(name=name, volume=0.85)
-
-            # 1. Adiciona o Delay padrão
-            delay = DelayPlugin(delay_time=0.25, feedback=0.4, mix=0.3)
-            delay.enabled = False
-            mixer_ch.add_plugin(delay)
-
-            # 2. Injeta dinamicamente todos os outros plugins encontrados na pasta!
-            for plugin_class in self.discovered_plugins:
-                novo_plugin = plugin_class()
-                novo_plugin.enabled = False  # Começam desligados (bypass)
-                mixer_ch.add_plugin(novo_plugin)
+            init_channel_fx(mixer_ch)
 
             self.drum_tracks.append({
                 'name': name,
@@ -214,17 +363,8 @@ class OndaKraftApp:
         self.melody_instrument = 'SOFT'
 
         # Inicializa a Pista Melódica Principal
-        # Inicializa a Pista Melódica Principal
         self.melody_track = InstrumentTrack("Melodia", self.melody_instrument)
-        melody_delay = DelayPlugin(delay_time=0.33, feedback=0.35, mix=0.25)
-        melody_delay.enabled = False
-        self.melody_track.mixer_channel.add_plugin(melody_delay)
-
-        # Injeta os novos efeitos dinâmicos na trilha de piano
-        for plugin_class in self.discovered_plugins:
-            novo_plugin = plugin_class()
-            novo_plugin.enabled = False
-            self.melody_track.mixer_channel.add_plugin(novo_plugin)
+        init_channel_fx(self.melody_track.mixer_channel)
 
         self.instrument_tracks = [self.melody_track]
 
@@ -389,6 +529,7 @@ class OndaKraftApp:
     def import_audio_track(self, path: str):
         try:
             new_track = AudioTrack.from_file(path)
+            init_channel_fx(new_track.mixer_channel)
             self.audio_tracks.append(new_track)
             print(f"Trilha importada com sucesso: {new_track.name}")
         except Exception as err:
@@ -466,7 +607,9 @@ class OndaKraftApp:
                 'muted': t['mixer_channel'].muted,
                 'solo': t['mixer_channel'].solo,
                 'pan': t['mixer_channel'].pan,
-                'delay_enabled': t['mixer_channel'].effects_chain[0].enabled
+                'delay_enabled': t['mixer_channel'].effects_chain[0].enabled,
+                'effects_chain': [p.enabled for p in t['mixer_channel'].effects_chain],
+                'effects_names': [p.name for p in t['mixer_channel'].effects_chain]
             } for t in self.drum_tracks],
             # Melodia
             'melody_pattern': melody_pattern_serialized,
@@ -475,7 +618,9 @@ class OndaKraftApp:
                 'muted': self.melody_track.mixer_channel.muted,
                 'solo': self.melody_track.mixer_channel.solo,
                 'pan': self.melody_track.mixer_channel.pan,
-                'delay_enabled': self.melody_track.mixer_channel.effects_chain[0].enabled
+                'delay_enabled': self.melody_track.mixer_channel.effects_chain[0].enabled,
+                'effects_chain': [p.enabled for p in self.melody_track.mixer_channel.effects_chain],
+                'effects_names': [p.name for p in self.melody_track.mixer_channel.effects_chain]
             },
             # Trilhas de Áudio Externas
             'audio_tracks': [{
@@ -537,7 +682,11 @@ class OndaKraftApp:
                     track['mixer_channel'].muted = mix.get('muted', False)
                     track['mixer_channel'].solo = mix.get('solo', False)
                     track['mixer_channel'].pan = mix.get('pan', 0.0)
-                    if 'delay_enabled' in mix and len(track['mixer_channel'].effects_chain) > 0:
+                    if 'effects_chain' in mix:
+                        for idx, val in enumerate(mix['effects_chain']):
+                            if idx < len(track['mixer_channel'].effects_chain):
+                                track['mixer_channel'].effects_chain[idx].enabled = val
+                    elif 'delay_enabled' in mix and len(track['mixer_channel'].effects_chain) > 0:
                         track['mixer_channel'].effects_chain[0].enabled = mix['delay_enabled']
 
             # Carrega Melodia (Instrument Track)
@@ -551,7 +700,11 @@ class OndaKraftApp:
             self.melody_track.mixer_channel.muted = loaded_melody_mixer.get('muted', False)
             self.melody_track.mixer_channel.solo = loaded_melody_mixer.get('solo', False)
             self.melody_track.mixer_channel.pan = loaded_melody_mixer.get('pan', 0.0)
-            if 'delay_enabled' in loaded_melody_mixer:
+            if 'effects_chain' in loaded_melody_mixer:
+                for idx, val in enumerate(loaded_melody_mixer['effects_chain']):
+                    if idx < len(self.melody_track.mixer_channel.effects_chain):
+                        self.melody_track.mixer_channel.effects_chain[idx].enabled = val
+            elif 'delay_enabled' in loaded_melody_mixer:
                 self.melody_track.mixer_channel.effects_chain[0].enabled = loaded_melody_mixer['delay_enabled']
 
             loaded_melody_pattern = state.get('melody_pattern', [])
@@ -586,6 +739,7 @@ class OndaKraftApp:
 
                 try:
                     loaded_track = AudioTrack.from_file(file_path)
+                    init_channel_fx(loaded_track.mixer_channel)
                     loaded_track.start_step = saved_at.get('start_step', 0)
                     loaded_track.mixer_channel.volume = saved_at.get('volume', 0.8)
                     loaded_track.mixer_channel.muted = saved_at.get('muted', False)
@@ -753,7 +907,13 @@ class OndaKraftApp:
                                 track['pattern'][step] = not track['pattern'][step]
                                 if track['pattern'][step]:
                                     sound_key = track['name']
-                                    self.play_sound_from_mixer(self.drum_sounds_map[sound_key], track['mixer_channel'])
+                                    raw_wave = self.drum_sounds_map.get(f"{sound_key}_WAVE")
+                                    if raw_wave is not None:
+                                        processed_wave = track['mixer_channel'].process_audio(raw_wave)
+                                        sound = make_sound(processed_wave)
+                                    else:
+                                        sound = self.drum_sounds_map[sound_key]
+                                    self.play_sound_from_mixer(sound, track['mixer_channel'])
                                 break
 
                 # Eventos de Clique no Piano Roll (Notas Melódicas)
@@ -771,7 +931,8 @@ class OndaKraftApp:
                         if key_rect.collidepoint(click_x, click_y):
                             preview_note = Note(pitch=note_name, instrument=self.melody_instrument)
                             preview_wave = self.melody_synth.create_dynamic_wave(preview_note, self.bpm)
-                            self.play_sound_from_mixer(make_sound(preview_wave), self.melody_track.mixer_channel)
+                            processed_wave = self.melody_track.mixer_channel.process_audio(preview_wave)
+                            self.play_sound_from_mixer(make_sound(processed_wave), self.melody_track.mixer_channel)
                             clicked_something = True
                             break
 
@@ -789,7 +950,8 @@ class OndaKraftApp:
                                     self.melody_track.set_note_at(note_index, step, new_note)
                                     # Toca prévia do som
                                     preview_wave = self.melody_synth.create_dynamic_wave(new_note, self.bpm)
-                                    self.play_sound_from_mixer(make_sound(preview_wave),
+                                    processed_wave = self.melody_track.mixer_channel.process_audio(preview_wave)
+                                    self.play_sound_from_mixer(make_sound(processed_wave),
                                                                self.melody_track.mixer_channel)
                                 clicked_something = True
                                 break
@@ -822,21 +984,77 @@ class OndaKraftApp:
 
                         mute_rect = pygame.Rect(x + 12, strip_top + 28, 34, 26)
                         solo_rect = pygame.Rect(x + 54, strip_top + 28, 34, 26)
-                        volume_rect = pygame.Rect(x + 45, strip_top + 82, 14, 230)
-                        pan_rect = pygame.Rect(x + 12, strip_top + 345, 76, 18)
+                        volume_rect = pygame.Rect(x + 45, strip_top + 162, 14, 130)
+                        pan_rect = pygame.Rect(x + 12, strip_top + 325, 76, 18)
 
-                        # Botão de Ativação do Plugin Delay (FX)
-                        delay_rect = pygame.Rect(x + 12, strip_top + 58, 76, 20)
+                        # Nova grade de FX de 2x4 posições
+                        fx_positions = [
+                            (x + 11, strip_top + 58),  # Slot 0
+                            (x + 49, strip_top + 58),  # Slot 1
+                            (x + 11, strip_top + 82),  # Slot 2
+                            (x + 49, strip_top + 82),  # Slot 3
+                            (x + 11, strip_top + 106),  # Slot 4
+                            (x + 49, strip_top + 106),  # Slot 5
+                            (x + 11, strip_top + 130),  # Slot 6
+                            (x + 49, strip_top + 130)  # Slot 7
+                        ]
 
-                        if mute_rect.collidepoint(click_x, click_y):
+                        clicked_fx = False
+                        for idx, (fx_x, fx_y) in enumerate(fx_positions):
+                            fx_rect = pygame.Rect(fx_x, fx_y, 36, 20)
+                            if fx_rect.collidepoint(click_x, click_y):
+                                clicked_fx = True
+                                if idx < len(channel.effects_chain):
+                                    plugin = channel.effects_chain[idx]
+                                    if idx == 7 and plugin.name == "":
+                                        # Carregamento dinâmico de plugin no slot 8
+                                        root = tk.Tk()
+                                        root.withdraw()
+                                        root.attributes('-topmost', True)
+                                        path = filedialog.askopenfilename(
+                                            title='Carregar Plugin Personalizado (.py)',
+                                            filetypes=[('Arquivos Python', '*.py')]
+                                        )
+                                        root.destroy()
+                                        if path:
+                                            try:
+                                                import importlib.util
+                                                import inspect
+                                                from plugins import AudioPlugin
+
+                                                module_name = os.path.basename(path)[:-3]
+                                                spec = importlib.util.spec_from_file_location(module_name, path)
+                                                if spec is not None and spec.loader is not None:
+                                                    module = importlib.util.module_from_spec(spec)
+                                                    spec.loader.exec_module(module)
+
+                                                    plugin_class = None
+                                                    for m_name, obj in inspect.getmembers(module, inspect.isclass):
+                                                        if issubclass(obj, AudioPlugin) and obj is not AudioPlugin:
+                                                            plugin_class = obj
+                                                            break
+
+                                                    if plugin_class:
+                                                        novo_plugin = plugin_class()
+                                                        novo_plugin.enabled = True
+                                                        channel.effects_chain[7] = novo_plugin
+                                                        print(
+                                                            f"Plugin '{novo_plugin.name}' carregado dinamicamente no canal {channel.name}!")
+                                                    else:
+                                                        print("Nenhum plugin herdado de AudioPlugin encontrado.")
+                                            except Exception as err:
+                                                print("Falha ao carregar plugin dinâmico:", err)
+                                    else:
+                                        plugin.enabled = not plugin.enabled
+                                break
+
+                        if clicked_fx:
+                            break
+                        elif mute_rect.collidepoint(click_x, click_y):
                             channel.muted = not channel.muted
                             break
                         elif solo_rect.collidepoint(click_x, click_y):
                             channel.solo = not channel.solo
-                            break
-                        elif delay_rect.collidepoint(click_x, click_y):
-                            if len(channel.effects_chain) > 0:
-                                channel.effects_chain[0].enabled = not channel.effects_chain[0].enabled
                             break
                         elif volume_rect.inflate(18, 0).collidepoint(click_x, click_y):
                             self.mixer_drag = (channel, 'volume', volume_rect)
@@ -1246,19 +1464,55 @@ class OndaKraftApp:
                 self.screen.blit(tiny_font.render('S', True, TEXT_COLOR),
                                  tiny_font.render('S', True, TEXT_COLOR).get_rect(center=solo_rect.center))
 
-                # Botão Delay (FX) em cada canal da Mesa
-                delay_rect = pygame.Rect(x + 12, strip_top + 58, 76, 20)
-                delay_active = len(channel.effects_chain) > 0 and channel.effects_chain[0].enabled
-                delay_color = PURPLE if delay_active else BUTTON_BACKGROUND
-                delay_txt_color = (255, 255, 255) if delay_active else SECONDARY_TEXT
+                # Nova grade de FX de 2x4 posições
+                fx_positions = [
+                    (x + 11, strip_top + 58),  # Slot 0
+                    (x + 49, strip_top + 58),  # Slot 1
+                    (x + 11, strip_top + 82),  # Slot 2
+                    (x + 49, strip_top + 82),  # Slot 3
+                    (x + 11, strip_top + 106),  # Slot 4
+                    (x + 49, strip_top + 106),  # Slot 5
+                    (x + 11, strip_top + 130),  # Slot 6
+                    (x + 49, strip_top + 130)  # Slot 7
+                ]
 
-                pygame.draw.rect(self.screen, delay_color, delay_rect)
-                pygame.draw.rect(self.screen, LINE_COLOR, delay_rect, 1)
-                delay_lbl = tiny_font.render('DELAY FX', True, delay_txt_color)
-                self.screen.blit(delay_lbl, delay_lbl.get_rect(center=delay_rect.center))
+                labels_map = {
+                    "Delay": "DLY",
+                    "Tremolo": "TRM",
+                    "Distortion": "DST",
+                    "Reverb": "RVB",
+                    "EQ": "EQ",
+                    "Compressor": "CMP",
+                    "Chorus": "CHO"
+                }
 
-                # Fader de Volume (Deslizador vertical)
-                volume_rect = pygame.Rect(x + 45, strip_top + 82, 14, 230)
+                for idx, (fx_x, fx_y) in enumerate(fx_positions):
+                    fx_rect = pygame.Rect(fx_x, fx_y, 36, 20)
+                    if idx < len(channel.effects_chain):
+                        plugin = channel.effects_chain[idx]
+                        p_name = plugin.name
+
+                        if p_name == "":
+                            lbl_text = "+"
+                        else:
+                            lbl_text = labels_map.get(p_name, p_name[:3].upper())
+
+                        # Determina a cor com base no estado de ativação
+                        if plugin.enabled:
+                            btn_color = PURPLE
+                            txt_color = (255, 255, 255)
+                        else:
+                            btn_color = BUTTON_BACKGROUND
+                            txt_color = SECONDARY_TEXT
+
+                        pygame.draw.rect(self.screen, btn_color, fx_rect)
+                        pygame.draw.rect(self.screen, LINE_COLOR, fx_rect, 1)
+
+                        fx_lbl_surf = tiny_font.render(lbl_text, True, txt_color)
+                        self.screen.blit(fx_lbl_surf, fx_lbl_surf.get_rect(center=fx_rect.center))
+
+                # Fader de Volume compactado (Deslizador vertical)
+                volume_rect = pygame.Rect(x + 45, strip_top + 162, 14, 130)
                 pygame.draw.rect(self.screen, LIGHT_LINE, volume_rect)
 
                 vol = channel.volume
@@ -1266,10 +1520,10 @@ class OndaKraftApp:
                 pygame.draw.rect(self.screen, BLUE, pygame.Rect(x + 37, knob_y - 5, 30, 10))
 
                 vol_val_lbl = tiny_font.render(str(int(vol * 100)), True, SECONDARY_TEXT)
-                self.screen.blit(vol_val_lbl, vol_val_lbl.get_rect(center=(x + 52, strip_top + 325)))
+                self.screen.blit(vol_val_lbl, vol_val_lbl.get_rect(center=(x + 52, strip_top + 305)))
 
                 # Slider de Pan (Panorâmica Estéreo Esquerda/Direita)
-                pan_rect = pygame.Rect(x + 12, strip_top + 345, 76, 18)
+                pan_rect = pygame.Rect(x + 12, strip_top + 325, 76, 18)
                 pygame.draw.line(self.screen, LIGHT_LINE, (pan_rect.left, pan_rect.centery),
                                  (pan_rect.right, pan_rect.centery), 3)
 
@@ -1278,7 +1532,7 @@ class OndaKraftApp:
                 pygame.draw.circle(self.screen, PURPLE, (pan_x, pan_rect.centery), 7)
 
                 pan_lbl = tiny_font.render('PAN', True, SECONDARY_TEXT)
-                self.screen.blit(pan_lbl, pan_lbl.get_rect(center=(x + 50, strip_top + 378)))
+                self.screen.blit(pan_lbl, pan_lbl.get_rect(center=(x + 50, strip_top + 355)))
 
         # Atualiza a renderização
         pygame.display.update()
