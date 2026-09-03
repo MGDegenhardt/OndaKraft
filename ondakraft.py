@@ -1,4 +1,3 @@
-
 import os
 import sys
 import time
@@ -21,7 +20,7 @@ from sequencer import Sequencer, InstrumentTrack, get_piano_notes
 from mixer import MixerChannel
 from plugin_loader import PluginLoader
 
-# Garante que a pasta 'plugins' e a pasta atual estejam no sys.path para importação direta de submódulos
+# Garante que a pasta 'plugins', 'synths' e a pasta atual estejam no sys.path para importação direta de submódulos
 import sys
 import os
 
@@ -31,6 +30,52 @@ if _current_dir not in sys.path:
 _plugins_dir = os.path.join(_current_dir, "plugins")
 if os.path.exists(_plugins_dir) and _plugins_dir not in sys.path:
     sys.path.insert(0, _plugins_dir)
+_synths_dir = os.path.join(_current_dir, "synths")
+if os.path.exists(_synths_dir) and _synths_dir not in sys.path:
+    sys.path.insert(0, _synths_dir)
+
+from synth_loader import SynthLoader
+
+try:
+    from base_synth import BaseSynthesizer
+except ImportError:
+    class BaseSynthesizer:
+        def __init__(self, name: str):
+            self.name = name.upper()
+
+        def generate_wave(self, freq, duration, sample_rate=44100, velocity=1.0):
+            t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+            wave = np.sin(2 * np.pi * freq * t)
+            fade = np.exp(-5.0 * t)
+            attack = np.minimum(1.0, t / 0.01)
+            return wave * fade * attack * 0.65 * velocity
+
+try:
+    try:
+        from synths.soft_synth import SoftSynth
+    except ImportError:
+        from soft_synth import SoftSynth
+except ImportError:
+    class SoftSynth(BaseSynthesizer):
+        def __init__(self): super().__init__("SOFT")
+
+try:
+    try:
+        from synths.pluck_synth import PluckSynth
+    except ImportError:
+        from pluck_synth import PluckSynth
+except ImportError:
+    class PluckSynth(BaseSynthesizer):
+        def __init__(self): super().__init__("PLUCK")
+
+try:
+    try:
+        from synths.bass_synth import BassSynth
+    except ImportError:
+        from bass_synth import BassSynth
+except ImportError:
+    class BassSynth(BaseSynthesizer):
+        def __init__(self): super().__init__("BASS")
 
 # Importando os plugins de forma segura com fallback de bypass
 try:
@@ -300,7 +345,7 @@ class OndaKraftApp:
         Gerencia telas, eventos Pygame, inicialização de áudio, gravação e persistência.
         """
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption('OndaKraft DAW - Criado com Python & NumPy')
+        pygame.display.set_caption('OndaKraft DAW')
         self.clock = pygame.time.Clock()
 
         # Parâmetros Globais do Sequenciador
@@ -317,8 +362,15 @@ class OndaKraftApp:
         # Motores e Sintetizadores Matemáticos
         self.drum_synth = DrumSynthesizer()
         self.melody_synth = MelodySynth()
-        self.sequencer = Sequencer()
+        self.sequencer = Sequencer(num_steps=32)
         self.exporter = AudioExporter()
+
+        # Variáveis e Retângulos de Paginação do Piano Roll (32 passos)
+        self.piano_page = 0
+        self.piano_auto_follow = True
+        self.piano_page1_rect = pygame.Rect(750, 585, 100, 30)
+        self.piano_page2_rect = pygame.Rect(865, 585, 100, 30)
+        self.piano_follow_rect = pygame.Rect(750, 545, 215, 26)
 
         self.plugin_loader = PluginLoader("plugins")
         self.discovered_plugins = self.plugin_loader.discover_and_load()
@@ -358,15 +410,30 @@ class OndaKraftApp:
                 'mixer_channel': mixer_ch
             })
 
-        # 2. Trilhas Melódicas (Instrument Tracks)
-        self.instruments = ['SOFT', 'PLUCK', 'BASS', 'KEYS', 'GUITAR', 'BRIGHT_SYNTH']
-        self.melody_instrument = 'SOFT'
+            # 2. Trilhas Melódicas (Instrument Tracks) - Multitrack Dinâmica baseada em /synths
+        self.synth_loader = SynthLoader("synths")
+        self.discovered_synths = self.synth_loader.discover_and_load()
 
-        # Inicializa a Pista Melódica Principal
-        self.melody_track = InstrumentTrack("Melodia", self.melody_instrument)
-        init_channel_fx(self.melody_track.mixer_channel)
+        self.available_synths = []
+        for s_class in self.discovered_synths:
+            try:
+                self.available_synths.append(s_class())
+            except Exception as e:
+                print(f"Erro ao instanciar synth {s_class.__name__}: {e}")
 
-        self.instrument_tracks = [self.melody_track]
+        # Fallbacks caso não tenha nenhum arquivo na pasta /synths
+        if not self.available_synths:
+            self.available_synths.append(SoftSynth())
+            self.available_synths.append(PluckSynth())
+            self.available_synths.append(BassSynth())
+
+        self.instrument_tracks = []
+        for synth in self.available_synths:
+            track = InstrumentTrack(synth.name, synth, num_steps=32)
+            init_channel_fx(track.mixer_channel)
+            self.instrument_tracks.append(track)
+
+        self.active_instrument_track_index = 0
 
         # 3. Trilhas de Áudio Importadas
         self.audio_tracks: list[AudioTrack] = []
@@ -576,23 +643,37 @@ class OndaKraftApp:
         if not path:
             return
 
-        # Serializa o estado das Trilhas Melódicas
-        melody_pattern_serialized = []
-        piano_notes = get_piano_notes()
-        for note_idx in range(len(piano_notes)):
-            row = []
-            for step in range(16):
-                note_obj = self.melody_track.pattern[note_idx][step]
-                if note_obj is not None:
-                    row.append({
-                        'pitch': note_obj.pitch,
-                        'instrument': note_obj.instrument,
-                        'duration_steps': note_obj.duration_steps,
-                        'velocity': note_obj.velocity
-                    })
-                else:
-                    row.append(None)
-            melody_pattern_serialized.append(row)
+        # Serializa o estado de todas as Trilhas Melódicas do projeto
+        instrument_tracks_serialized = []
+        for track in self.instrument_tracks:
+            pattern_serialized = []
+            for note_idx in range(len(track.piano_notes)):
+                row = []
+                for step in range(32):
+                    note_obj = track.pattern[note_idx][step]
+                    if note_obj is not None:
+                        row.append({
+                            'pitch': note_obj.pitch,
+                            'instrument': note_obj.instrument,
+                            'duration_steps': note_obj.duration_steps,
+                            'velocity': note_obj.velocity
+                        })
+                    else:
+                        row.append(None)
+                pattern_serialized.append(row)
+
+            instrument_tracks_serialized.append({
+                'name': track.name,
+                'synth_name': track.synth.name,
+                'pattern': pattern_serialized,
+                'mixer': {
+                    'volume': track.mixer_channel.volume,
+                    'muted': track.mixer_channel.muted,
+                    'solo': track.mixer_channel.solo,
+                    'pan': track.mixer_channel.pan,
+                    'effects_chain': [p.enabled for p in track.mixer_channel.effects_chain]
+                }
+            })
 
         project_state = {
             'version': 3,
@@ -612,16 +693,7 @@ class OndaKraftApp:
                 'effects_names': [p.name for p in t['mixer_channel'].effects_chain]
             } for t in self.drum_tracks],
             # Melodia
-            'melody_pattern': melody_pattern_serialized,
-            'melody_mixer': {
-                'volume': self.melody_track.mixer_channel.volume,
-                'muted': self.melody_track.mixer_channel.muted,
-                'solo': self.melody_track.mixer_channel.solo,
-                'pan': self.melody_track.mixer_channel.pan,
-                'delay_enabled': self.melody_track.mixer_channel.effects_chain[0].enabled,
-                'effects_chain': [p.enabled for p in self.melody_track.mixer_channel.effects_chain],
-                'effects_names': [p.name for p in self.melody_track.mixer_channel.effects_chain]
-            },
+            'instrument_tracks': instrument_tracks_serialized,
             # Trilhas de Áudio Externas
             'audio_tracks': [{
                 'name': t.name,
@@ -690,7 +762,7 @@ class OndaKraftApp:
                         track['mixer_channel'].effects_chain[0].enabled = mix['delay_enabled']
 
             # Carrega Melodia (Instrument Track)
-            self.melody_track = InstrumentTrack("Melodia", self.melody_instrument)
+            self.melody_track = InstrumentTrack("Melodia", self.melody_instrument, num_steps=32)
             melody_delay = DelayPlugin(delay_time=0.33, feedback=0.35, mix=0.25)
             self.melody_track.mixer_channel.add_plugin(melody_delay)
             self.instrument_tracks = [self.melody_track]
@@ -712,7 +784,8 @@ class OndaKraftApp:
             for note_idx in range(len(piano_notes)):
                 if note_idx >= len(loaded_melody_pattern):
                     continue
-                for step in range(16):
+                num_loaded_steps = len(loaded_melody_pattern[note_idx]) if loaded_melody_pattern else 0
+                for step in range(min(32, num_loaded_steps)):
                     cell = loaded_melody_pattern[note_idx][step]
                     if cell is not None:
                         # Se for do formato antigo (JRYBeats salva strings de instrumento diretamente)
@@ -926,52 +999,115 @@ class OndaKraftApp:
                         note_name = piano_notes[note_index]
                         y = self.piano_grid_top + visible_row * self.piano_row_height
 
-                        # Clicar na Tecla Virtual do Piano (Toca uma prévia rápida)
+                        # Clicar na Tecla Virtual do Piano (Toca uma prévia rápida usando o synth ativo!)
                         key_rect = pygame.Rect(20, y, 100, self.piano_row_height)
                         if key_rect.collidepoint(click_x, click_y):
-                            preview_note = Note(pitch=note_name, instrument=self.melody_instrument)
-                            preview_wave = self.melody_synth.create_dynamic_wave(preview_note, self.bpm)
-                            processed_wave = self.melody_track.mixer_channel.process_audio(preview_wave)
-                            self.play_sound_from_mixer(make_sound(processed_wave), self.melody_track.mixer_channel)
+                            current_track = self.instrument_tracks[self.active_instrument_track_index]
+                            freq = self.melody_synth.note_frequency(note_name)
+                            step_duration_sec = 60.0 / self.bpm / 4.0
+                            preview_wave = current_track.synth.generate_wave(freq, step_duration_sec, 44100, 1.0)
+                            processed_wave = current_track.mixer_channel.process_audio(preview_wave)
+                            self.play_sound_from_mixer(make_sound(processed_wave), current_track.mixer_channel)
                             clicked_something = True
                             break
 
                         # Clicar na Grade de Passos
                         for step in range(16):
+                            actual_step = self.piano_page * 16 + step
                             x = self.piano_grid_start_x + step * self.piano_step_width
                             cell_rect = pygame.Rect(x, y, self.piano_step_width, self.piano_row_height)
                             if cell_rect.collidepoint(click_x, click_y):
-                                current_note = self.melody_track.pattern[note_index][step]
-                                if current_note is not None and current_note.instrument == self.melody_instrument:
-                                    self.melody_track.clear_note_at(note_index, step)
+                                current_track = self.instrument_tracks[self.active_instrument_track_index]
+                                current_note = current_track.pattern[note_index][actual_step]
+                                if current_note is not None:
+                                    current_track.clear_note_at(note_index, actual_step)
                                 else:
-                                    # Cria uma nota dinâmica (comprimento padrão: 1 passo)
-                                    new_note = Note(pitch=note_name, instrument=self.melody_instrument)
-                                    self.melody_track.set_note_at(note_index, step, new_note)
-                                    # Toca prévia do som
-                                    preview_wave = self.melody_synth.create_dynamic_wave(new_note, self.bpm)
-                                    processed_wave = self.melody_track.mixer_channel.process_audio(preview_wave)
-                                    self.play_sound_from_mixer(make_sound(processed_wave),
-                                                               self.melody_track.mixer_channel)
+                                    new_note = Note(pitch=note_name, instrument=current_track.synth.name)
+                                    current_track.set_note_at(note_index, actual_step, new_note)
+                                    freq = self.melody_synth.note_frequency(note_name)
+                                    step_duration_sec = 60.0 / self.bpm / 4.0
+                                    preview_wave = current_track.synth.generate_wave(freq, step_duration_sec, 44100,
+                                                                                     1.0)
+                                    processed_wave = current_track.mixer_channel.process_audio(preview_wave)
+                                    self.play_sound_from_mixer(make_sound(processed_wave), current_track.mixer_channel)
                                 clicked_something = True
                                 break
 
                     if not clicked_something:
                         # Seletor de Instrumentos (Abas no rodapé do Piano Roll)
                         instrument_y = 585
-                        for idx, inst_name in enumerate(self.instruments):
+                        for idx, track in enumerate(self.instrument_tracks):
                             rect = pygame.Rect(130 + idx * 100, instrument_y, 85, 30)
                             if rect.collidepoint(click_x, click_y):
-                                self.melody_instrument = inst_name
-                                self.melody_track.instrument_type = inst_name
+                                self.active_instrument_track_index = idx
+                                clicked_something = True
                                 break
+
+                        if not clicked_something:
+                            # Clicar no botão "+" de adicionar pista melódica de sintetizador dinâmico
+                            add_rect = pygame.Rect(130 + len(self.instrument_tracks) * 100, instrument_y, 40, 30)
+                            if add_rect.collidepoint(click_x, click_y):
+                                clicked_something = True
+                                # Carregamento dinâmico de classe de sintetizador personalizado
+                                root = tk.Tk()
+                                root.withdraw()
+                                root.attributes('-topmost', True)
+                                path = filedialog.askopenfilename(
+                                    title='Carregar Sintetizador Personalizado (.py)',
+                                    filetypes=[('Arquivos Python', '*.py')]
+                                )
+                                root.destroy()
+                                if path:
+                                    try:
+                                        import importlib.util
+                                        import inspect
+                                        from base_synth import BaseSynthesizer
+
+                                        module_name = os.path.basename(path)[:-3]
+                                        spec = importlib.util.spec_from_file_location(module_name, path)
+                                        if spec is not None and spec.loader is not None:
+                                            module = importlib.util.module_from_spec(spec)
+                                            spec.loader.exec_module(module)
+
+                                            synth_class = None
+                                            for m_name, obj in inspect.getmembers(module, inspect.isclass):
+                                                if issubclass(obj, BaseSynthesizer) and obj is not BaseSynthesizer:
+                                                    synth_class = obj
+                                                    break
+
+                                            if synth_class:
+                                                novo_synth = synth_class()
+                                                nova_trilha = InstrumentTrack(name=novo_synth.name, synth=novo_synth,
+                                                                              num_steps=32)
+                                                init_channel_fx(nova_trilha.mixer_channel)
+                                                self.instrument_tracks.append(nova_trilha)
+                                                self.active_instrument_track_index = len(self.instrument_tracks) - 1
+                                                print(f"Sintetizador '{novo_synth.name}' carregado dinamicamente!")
+                                            else:
+                                                print(
+                                                    "Nenhum sintetizador herdado de BaseSynthesizer encontrado no arquivo.")
+                                    except Exception as err:
+                                        print("Falha ao carregar sintetizador personalizado:", err)
+
+                        # Processa cliques nos botões de paginação do Piano Roll
+                        if not clicked_something:
+                            if self.piano_page1_rect.collidepoint(click_x, click_y):
+                                self.piano_page = 0
+                                clicked_something = True
+                            elif self.piano_page2_rect.collidepoint(click_x, click_y):
+                                self.piano_page = 1
+                                clicked_something = True
+                            elif self.piano_follow_rect.collidepoint(click_x, click_y):
+                                self.piano_auto_follow = not self.piano_auto_follow
+                                clicked_something = True
 
                 # Mixer de Canais (Interações)
                 elif self.current_view == 'MIXER':
                     mixer_tracks = []
                     for track in self.drum_tracks:
                         mixer_tracks.append((track['name'], track['mixer_channel']))
-                    mixer_tracks.append(('PIANO', self.melody_track.mixer_channel))
+                    for track in self.instrument_tracks:
+                        mixer_tracks.append((track.name, track.mixer_channel))
                     for track in self.audio_tracks:
                         mixer_tracks.append((track.name, track.mixer_channel))
 
@@ -1074,10 +1210,10 @@ class OndaKraftApp:
                         mute_rect = pygame.Rect(30, y + 20, 30, 25)
                         delete_rect = pygame.Rect(70, y + 20, 30, 25)
 
-                        loop_duration = 60 / self.bpm / 4 * 16
+                        loop_duration = 60 / self.bpm / 4 * 32
                         clip_width = int(track.length / loop_duration * 740)
                         clip_width = max(50, min(740, clip_width))
-                        clip_x = 210 + int(track.start_step / 16 * 740)
+                        clip_x = 210 + int(track.start_step / 32 * 740)
                         clip_rect = pygame.Rect(clip_x, y + 10, clip_width, 48)
 
                         if mute_rect.collidepoint(click_x, click_y):
@@ -1109,7 +1245,7 @@ class OndaKraftApp:
                     relative_x = motion_x - 210
                     ratio = relative_x / 740
                     ratio = max(0, min(0.999, ratio))
-                    new_step = int(ratio * 16)
+                    new_step = int(ratio * 32)
                     self.audio_tracks[self.dragging_audio].start_step = new_step
 
         return True
@@ -1119,8 +1255,10 @@ class OndaKraftApp:
         if self.playing:
             while now >= self.next_step_time:
                 self.current_step += 1
-                if self.current_step >= 16:
+                if self.current_step >= 32:
                     self.current_step = 0
+                if self.piano_auto_follow:
+                    self.piano_page = self.current_step // 16
 
                 # Despara os sons correspondentes ao passo atual
                 self.sequencer.play_step(
@@ -1257,10 +1395,11 @@ class OndaKraftApp:
 
         # ------------------- VIEW: PIANO ROLL (MELODIA) -------------------
         elif self.current_view == 'PIANO':
-            # Numeração dos passos na grade melódica
+            # Numeração dos passos na grade melódica (com offset de página)
             for step in range(16):
                 x = self.piano_grid_start_x + step * self.piano_step_width
-                num_lbl = step_font.render(str(step + 1), True, TEXT_COLOR)
+                actual_step_num = step + 1 + self.piano_page * 16
+                num_lbl = step_font.render(str(actual_step_num), True, TEXT_COLOR)
                 self.screen.blit(num_lbl, num_lbl.get_rect(center=(x + self.piano_step_width // 2, 213)))
 
             # Grade de Teclas do Piano
@@ -1283,12 +1422,14 @@ class OndaKraftApp:
                 note_lbl = tiny_font.render(note_name, True, txt_color)
                 self.screen.blit(note_lbl, (35, y + 7))
 
-                # Grade de Células de Passo
+                # Grade de Células de Passo (Com offset de página ativa)
                 for step in range(16):
                     x = self.piano_grid_start_x + step * self.piano_step_width
                     cell_rect = pygame.Rect(x, y, self.piano_step_width, self.piano_row_height)
 
-                    note_obj = self.melody_track.pattern[note_index][step]
+                    actual_step = step + self.piano_page * 16
+                    current_track = self.instrument_tracks[self.active_instrument_track_index]
+                    note_obj = current_track.pattern[note_index][actual_step]
                     if note_obj is not None:
                         inst = note_obj.instrument
                         cell_color = self.INSTRUMENT_COLORS.get(inst, BLUE)
@@ -1302,26 +1443,73 @@ class OndaKraftApp:
                     pygame.draw.rect(self.screen, cell_color, cell_rect)
                     pygame.draw.rect(self.screen, LIGHT_LINE, cell_rect, 1)
 
-            # Playhead Vertical do Piano Roll
+            # Playhead Vertical do Piano Roll (Apenas se pertencer à página ativa)
             if self.playing:
-                playhead_x = self.piano_grid_start_x + self.current_step * self.piano_step_width
-                pygame.draw.line(self.screen, PLAYHEAD_BLUE, (playhead_x, self.piano_grid_top),
-                                 (playhead_x, self.piano_grid_top + self.visible_piano_rows * self.piano_row_height), 3)
+                playhead_page = self.current_step // 16
+                if playhead_page == self.piano_page:
+                    local_step = self.current_step % 16
+                    playhead_x = self.piano_grid_start_x + local_step * self.piano_step_width
+                    pygame.draw.line(self.screen, PLAYHEAD_BLUE, (playhead_x, self.piano_grid_top), (playhead_x,
+                                                                                                     self.piano_grid_top + self.visible_piano_rows * self.piano_row_height),
+                                     3)
 
-            # Seletor de Instrumento Melódico Ativo (Menu de rodapé)
+            # Seletor de Instrumento Melódico Ativo (Sub-abas dinâmicas de instrumento)
             instrument_y = 585
-            for idx, inst_name in enumerate(self.instruments):
+            for idx, track in enumerate(self.instrument_tracks):
                 rect = pygame.Rect(130 + idx * 100, instrument_y, 85, 30)
-                if self.melody_instrument == inst_name:
-                    pygame.draw.rect(self.screen, self.INSTRUMENT_COLORS.get(inst_name, BLUE), rect)
+                if self.active_instrument_track_index == idx:
+                    pygame.draw.rect(self.screen, self.INSTRUMENT_COLORS.get(track.synth.name, BLUE), rect)
                     text_color = (255, 255, 255)
                 else:
                     pygame.draw.rect(self.screen, BUTTON_BACKGROUND, rect)
                     text_color = TEXT_COLOR
                 pygame.draw.rect(self.screen, LINE_COLOR, rect, 1)
 
-                inst_lbl = tiny_font.render(inst_name, True, text_color)
+                inst_lbl = tiny_font.render(track.name[:10], True, text_color)
                 self.screen.blit(inst_lbl, inst_lbl.get_rect(center=rect.center))
+
+            # Desenha botão "+" para adicionar sintetizador dinâmico
+            add_rect = pygame.Rect(130 + len(self.instrument_tracks) * 100, instrument_y, 40, 30)
+            pygame.draw.rect(self.screen, BUTTON_BACKGROUND, add_rect)
+            pygame.draw.rect(self.screen, LINE_COLOR, add_rect, 1)
+            plus_lbl = tiny_font.render("+", True, TEXT_COLOR)
+            self.screen.blit(plus_lbl, plus_lbl.get_rect(center=add_rect.center))
+
+            # --- Desenha os Botões de Paginação do Piano Roll (32 passos) ---
+            # Botão Compasso 1
+            if self.piano_page == 0:
+                pygame.draw.rect(self.screen, PLAYHEAD_BLUE, self.piano_page1_rect)
+                p1_txt_color = (255, 255, 255)
+            else:
+                pygame.draw.rect(self.screen, BUTTON_BACKGROUND, self.piano_page1_rect)
+                p1_txt_color = TEXT_COLOR
+            pygame.draw.rect(self.screen, LINE_COLOR, self.piano_page1_rect, 1)
+            p1_lbl = tiny_font.render("COMP. 1", True, p1_txt_color)
+            self.screen.blit(p1_lbl, p1_lbl.get_rect(center=self.piano_page1_rect.center))
+
+            # Botão Compasso 2
+            if self.piano_page == 1:
+                pygame.draw.rect(self.screen, PLAYHEAD_BLUE, self.piano_page2_rect)
+                p2_txt_color = (255, 255, 255)
+            else:
+                pygame.draw.rect(self.screen, BUTTON_BACKGROUND, self.piano_page2_rect)
+                p2_txt_color = TEXT_COLOR
+            pygame.draw.rect(self.screen, LINE_COLOR, self.piano_page2_rect, 1)
+            p2_lbl = tiny_font.render("COMP. 2", True, p2_txt_color)
+            self.screen.blit(p2_lbl, p2_lbl.get_rect(center=self.piano_page2_rect.center))
+
+            # Botão Auto-Follow
+            if self.piano_auto_follow:
+                pygame.draw.rect(self.screen, GREEN, self.piano_follow_rect)
+                follow_txt_color = (255, 255, 255)
+                follow_txt = "AUTO-FOLLOW: ON"
+            else:
+                pygame.draw.rect(self.screen, BUTTON_BACKGROUND, self.piano_follow_rect)
+                follow_txt_color = SECONDARY_TEXT
+                follow_txt = "AUTO-FOLLOW: OFF"
+            pygame.draw.rect(self.screen, LINE_COLOR, self.piano_follow_rect, 1)
+            follow_lbl = tiny_font.render(follow_txt, True, follow_txt_color)
+            self.screen.blit(follow_lbl, follow_lbl.get_rect(center=self.piano_follow_rect.center))
 
         # ------------------- VIEW: AUDIO TIMELINE (SAMPLES) -------------------
         elif self.current_view == 'AUDIO':
@@ -1370,16 +1558,17 @@ class OndaKraftApp:
                 midleft=(icon_x + microphone_image.get_width() + 5, self.record_audio_rect.centery))
             self.screen.blit(txt_record_surf, txt_rec_rect)
 
-            # Linhas da Grade de Timeline do Áudio
-            for step in range(16):
-                x = 210 + int(step / 16 * 740)
+            # Linhas da Grade de Timeline do Áudio (32 passos)
+            for step in range(32):
+                x = 210 + int(step / 32 * 740)
                 pygame.draw.line(self.screen, LIGHT_LINE, (x, 255), (x, HEIGHT - 25), 1)
-                step_lbl = tiny_font.render(str(step + 1), True, SECONDARY_TEXT)
-                self.screen.blit(step_lbl, (x + 4, 238))
+                if step % 2 == 0:
+                    step_lbl = tiny_font.render(str(step + 1), True, SECONDARY_TEXT)
+                    self.screen.blit(step_lbl, (x + 4, 238))
 
             # Playhead da Timeline
             if self.playing:
-                playhead_x = 210 + int(self.current_step / 16 * 740)
+                playhead_x = 210 + int(self.current_step / 32 * 740)
                 pygame.draw.line(self.screen, PLAYHEAD_BLUE, (playhead_x, 255), (playhead_x, HEIGHT - 20), 3)
 
             # Renderiza as pistas de áudio físicas e formas de onda
@@ -1408,10 +1597,10 @@ class OndaKraftApp:
                 self.screen.blit(name_lbl, (108, y + 25))
 
                 # Desenha o Clipe de Áudio Redimensionável na Timeline
-                loop_duration = 60 / self.bpm / 4 * 16
+                loop_duration = 60 / self.bpm / 4 * 32
                 clip_width = int(track.length / loop_duration * 740)
                 clip_width = max(50, min(740, clip_width))
-                clip_x = 210 + int(track.start_step / 16 * 740)
+                clip_x = 210 + int(track.start_step / 32 * 740)
                 clip_rect = pygame.Rect(clip_x, y + 10, clip_width, 48)
 
                 pygame.draw.rect(self.screen, (240, 220, 195), clip_rect)
@@ -1425,7 +1614,8 @@ class OndaKraftApp:
             mixer_tracks = []
             for track in self.drum_tracks:
                 mixer_tracks.append((track['name'], track['mixer_channel']))
-            mixer_tracks.append(('PIANO', self.melody_track.mixer_channel))
+            for track in self.instrument_tracks:
+                mixer_tracks.append((track.name, track.mixer_channel))
             for track in self.audio_tracks:
                 mixer_tracks.append((track.name, track.mixer_channel))
 
@@ -1538,7 +1728,7 @@ class OndaKraftApp:
         pygame.display.update()
 
     def run(self):
-        """Método de inicialização e controle do loop principal da DAW OndaKraft."""
+        """Metodo de inicialização e controle do loop principal da DAW OndaKraft."""
         running = True
         while running:
             now = pygame.time.get_ticks()
