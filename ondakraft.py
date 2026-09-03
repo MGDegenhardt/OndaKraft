@@ -184,11 +184,11 @@ pygame.mixer.init(frequency=44100, size=-16, channels=2)
 # Constantes de Janela e Design
 WIDTH = 1000
 HEIGHT = 650
-BACKGROUND = (245, 245, 242)
-TEXT_COLOR = (45, 45, 45)
-SECONDARY_TEXT = (120, 120, 120)
-LINE_COLOR = (70, 70, 70)
-LIGHT_LINE = (205, 205, 200)
+BACKGROUND = (41, 41, 102)  # HSV(240, 60, 40)
+TEXT_COLOR = (245, 245, 245)
+SECONDARY_TEXT = (180, 180, 185)
+LINE_COLOR = (80, 80, 140)
+LIGHT_LINE = (60, 60, 115)
 BLUE = (35, 85, 170)
 PLAYHEAD_BLUE = (75, 135, 220)
 GREEN = (40, 150, 65)
@@ -197,11 +197,11 @@ RED = (210, 60, 60)
 PURPLE = (110, 95, 210)
 PURPLE_HOVER = (130, 115, 225)
 ORANGE = (215, 130, 45)
-BUTTON_BACKGROUND = (250, 250, 247)
-STEP_BACKGROUND = (252, 252, 250)
-STEP_HOVER = (225, 225, 220)
-BLACK_KEY = (45, 45, 48)
-WHITE_KEY = (245, 245, 242)
+BUTTON_BACKGROUND = (55, 55, 120)
+STEP_BACKGROUND = (48, 48, 110)
+STEP_HOVER = (75, 75, 150)
+BLACK_KEY = (30, 30, 35)
+WHITE_KEY = (235, 235, 240)
 
 # Configuração de Fontes Typográficas
 title_font = pygame.font.Font(None, 40)
@@ -219,6 +219,17 @@ def make_sound(wave):
     stereo = np.column_stack((audio, audio))
     stereo = np.ascontiguousarray(stereo)
     return pygame.sndarray.make_sound(stereo)
+
+
+def draw_vertical_gradient(surface, color_start, color_end, rect):
+    """Draws a vertical gradient on a surface inside the given rect."""
+    x, y, w, h = rect
+    for i in range(h):
+        ratio = i / h
+        r = int(color_start[0] * (1 - ratio) + color_end[0] * ratio)
+        g = int(color_start[1] * (1 - ratio) + color_end[1] * ratio)
+        b = int(color_start[2] * (1 - ratio) + color_end[2] * ratio)
+        pygame.draw.line(surface, (r, g, b), (x, y + i), (x + w - 1, y + i))
 
 
 # Iconografia em Vetores do Pygame (Mantém o app leve e sem dependências de arquivos externos)
@@ -345,7 +356,7 @@ class OndaKraftApp:
         Gerencia telas, eventos Pygame, inicialização de áudio, gravação e persistência.
         """
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption('OndaKraft DAW')
+        pygame.display.set_caption('OndaKraft DAW - by MGDegenhardt')
         self.clock = pygame.time.Clock()
 
         # Parâmetros Globais do Sequenciador
@@ -368,10 +379,10 @@ class OndaKraftApp:
         # Variáveis e Retângulos de Paginação do Piano Roll (32 passos)
         self.piano_page = 0
         self.piano_auto_follow = True
-        self.piano_page1_rect = pygame.Rect(750, 585, 100, 30)
-        self.piano_page2_rect = pygame.Rect(865, 585, 100, 30)
-        self.piano_follow_rect = pygame.Rect(750, 545, 215, 26)
-        self.piano_config_rect = pygame.Rect(750, 505, 215, 30)
+        self.piano_config_rect = pygame.Rect(130, 595, 150, 30)  # Moldar Timbre
+        self.piano_page1_rect = pygame.Rect(300, 595, 90, 30)  # Compasso 1
+        self.piano_page2_rect = pygame.Rect(400, 595, 90, 30)  # Compasso 2
+        self.piano_follow_rect = pygame.Rect(510, 595, 140, 30)  # Auto-Follow
 
         self.plugin_loader = PluginLoader("plugins")
         self.discovered_plugins = self.plugin_loader.discover_and_load()
@@ -623,7 +634,9 @@ class OndaKraftApp:
         # Cria uma janela modal do Tkinter
         root = tk.Tk()
         root.title(f"Ajustar Timbre: {synth.name}")
-        root.geometry("400x250")
+        num_params = len(synth.parameters) if hasattr(synth, "parameters") and synth.parameters else 2
+        window_height = 130 + num_params * 55
+        root.geometry(f"400x{window_height}")
         root.resizable(False, False)
         root.attributes('-topmost', True)
         root.configure(bg="#f5f5f2")
@@ -1150,7 +1163,7 @@ class OndaKraftApp:
 
                     if not clicked_something:
                         # Seletor de Instrumentos (Abas no rodapé do Piano Roll)
-                        instrument_y = 585
+                        instrument_y = 545
                         for idx, track in enumerate(self.instrument_tracks):
                             rect = pygame.Rect(130 + idx * 100, instrument_y, 85, 30)
                             if rect.collidepoint(click_x, click_y):
@@ -1392,8 +1405,12 @@ class OndaKraftApp:
         mouse_pos = pygame.mouse.get_pos()
         piano_notes = get_piano_notes()
 
-        # Título da DAW
-        title = title_font.render('OndaKraft', True, TEXT_COLOR)
+        # Fundo do cabeçalho em gradiente vertical (Preto para azul escuro)
+        draw_vertical_gradient(self.screen, (0, 0, 0), BACKGROUND, (0, 0, WIDTH, 68))
+
+        # Título da DAW em letras amarelas (HSV: 60, 100, 100 -> RGB: 255, 255, 0)
+        title_color = (255, 255, 0)
+        title = title_font.render('OndaKraft', True, title_color)
         self.screen.blit(title, (25, 18))
         pygame.draw.line(self.screen, LINE_COLOR, (0, 68), (WIDTH, 68), 1)
 
@@ -1532,7 +1549,7 @@ class OndaKraftApp:
                 key_rect = pygame.Rect(20, y, 100, self.piano_row_height)
 
                 key_color = BLACK_KEY if is_sharp else WHITE_KEY
-                txt_color = (240, 240, 240) if is_sharp else TEXT_COLOR
+                txt_color = (240, 240, 240) if is_sharp else (45, 45, 45)
 
                 pygame.draw.rect(self.screen, key_color, key_rect)
                 pygame.draw.rect(self.screen, LINE_COLOR, key_rect, 1)
@@ -1554,7 +1571,7 @@ class OndaKraftApp:
                         if cell_rect.collidepoint(mouse_pos):
                             cell_color = self.INSTRUMENT_HOVER_COLORS.get(inst, PLAYHEAD_BLUE)
                     else:
-                        cell_color = (232, 232, 228) if is_sharp else (248, 248, 245)
+                        cell_color = (55, 55, 115) if is_sharp else (45, 45, 105)
                         if cell_rect.collidepoint(mouse_pos):
                             cell_color = STEP_HOVER
 
@@ -1572,7 +1589,7 @@ class OndaKraftApp:
                                      3)
 
             # Seletor de Instrumento Melódico Ativo (Sub-abas dinâmicas de instrumento)
-            instrument_y = 585
+            instrument_y = 545
             for idx, track in enumerate(self.instrument_tracks):
                 rect = pygame.Rect(130 + idx * 100, instrument_y, 85, 30)
                 if self.active_instrument_track_index == idx:
