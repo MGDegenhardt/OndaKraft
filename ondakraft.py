@@ -24,12 +24,26 @@ from plugin_loader import PluginLoader
 import sys
 import os
 
-_current_dir = os.path.dirname(os.path.abspath(__file__))
+# Garante que o sys e o os estejam importados
+import sys
+import os
+
+# 1. Determina o diretório base de forma inteligente (compatível com script ou executável .exe)
+if getattr(sys, 'frozen', False):
+    _current_dir = os.path.dirname(sys.executable)
+else:
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Garante que o diretório atual está no sys.path
 if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
+
+# 3. Configura e registra a pasta 'plugins' no sys.path
 _plugins_dir = os.path.join(_current_dir, "plugins")
 if os.path.exists(_plugins_dir) and _plugins_dir not in sys.path:
     sys.path.insert(0, _plugins_dir)
+
+# 4. Configura e registra a pasta 'synths' no sys.path
 _synths_dir = os.path.join(_current_dir, "synths")
 if os.path.exists(_synths_dir) and _synths_dir not in sys.path:
     sys.path.insert(0, _synths_dir)
