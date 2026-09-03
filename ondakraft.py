@@ -371,6 +371,7 @@ class OndaKraftApp:
         self.piano_page1_rect = pygame.Rect(750, 585, 100, 30)
         self.piano_page2_rect = pygame.Rect(865, 585, 100, 30)
         self.piano_follow_rect = pygame.Rect(750, 545, 215, 26)
+        self.piano_config_rect = pygame.Rect(750, 505, 215, 30)
 
         self.plugin_loader = PluginLoader("plugins")
         self.discovered_plugins = self.plugin_loader.discover_and_load()
@@ -614,6 +615,120 @@ class OndaKraftApp:
         root.destroy()
         if path:
             self.import_audio_track(path)
+
+    def open_synth_config_window(self):
+        current_track = self.instrument_tracks[self.active_instrument_track_index]
+        synth = current_track.synth
+
+        # Cria uma janela modal do Tkinter
+        root = tk.Tk()
+        root.title(f"Ajustar Timbre: {synth.name}")
+        root.geometry("400x250")
+        root.resizable(False, False)
+        root.attributes('-topmost', True)
+        root.configure(bg="#f5f5f2")
+
+        # Rótulo de título
+        title_lbl = tk.Label(
+            root,
+            text=f"Ajustes do Sintetizador: {synth.name}",
+            font=("Helvetica", 12, "bold"),
+            bg="#f5f5f2",
+            fg="#2d2d2d"
+        )
+        title_lbl.pack(pady=15)
+
+        # Se o sintetizador não tiver parâmetros definidos, criamos um default de segurança
+        if not hasattr(synth, "parameters") or not synth.parameters:
+            synth.parameters = {
+                "Volume Global": [0.65, 0.0, 1.0],
+                "Ataque (Attack)": [0.01, 0.001, 0.3]
+            }
+
+        sliders = {}
+
+        # Para cada parâmetro, criamos um rótulo e um slider (Scale)
+        for param_name, param_values in synth.parameters.items():
+            current_val, min_val, max_val = param_values
+
+            frame = tk.Frame(root, bg="#f5f5f2")
+            frame.pack(fill="x", padx=30, pady=8)
+
+            lbl = tk.Label(
+                frame,
+                text=param_name,
+                font=("Helvetica", 10),
+                bg="#f5f5f2",
+                fg="#464646",
+                width=18,
+                anchor="w"
+            )
+            lbl.pack(side="left")
+
+            resolution = 0.01 if max_val <= 2.0 else 0.1
+            if max_val <= 0.2:
+                resolution = 0.001
+
+            scale = tk.Scale(
+                frame,
+                from_=min_val,
+                to=max_val,
+                resolution=resolution,
+                orient="horizontal",
+                bg="#f5f5f2",
+                fg="#2d2d2d",
+                troughcolor="#cdcdc8",
+                activebackground="#6e5fd2",
+                highlightthickness=0,
+                length=160
+            )
+            scale.set(current_val)
+            scale.pack(side="right")
+
+            sliders[param_name] = scale
+
+        # Botões de confirmação
+        btn_frame = tk.Frame(root, bg="#f5f5f2")
+        btn_frame.pack(pady=15)
+
+        def apply_changes():
+            for param_name, scale in sliders.items():
+                val = scale.get()
+                synth.parameters[param_name][0] = val
+            print(f"Novas preconfigurações aplicadas para o {synth.name}!")
+            root.destroy()
+
+        ok_btn = tk.Button(
+            btn_frame,
+            text="APLICAR & OK",
+            command=apply_changes,
+            font=("Helvetica", 9, "bold"),
+            bg="#289641",
+            fg="white",
+            activebackground="#37af50",
+            activeforeground="white",
+            padx=12,
+            pady=4,
+            bd=0
+        )
+        ok_btn.pack(side="left", padx=10)
+
+        cancel_btn = tk.Button(
+            btn_frame,
+            text="CANCELAR",
+            command=root.destroy,
+            font=("Helvetica", 9),
+            bg="#d23c3c",
+            fg="white",
+            activebackground="#e15a5a",
+            activeforeground="white",
+            padx=12,
+            pady=4,
+            bd=0
+        )
+        cancel_btn.pack(side="right", padx=10)
+
+        root.mainloop()
 
     def get_all_channels(self) -> list[MixerChannel]:
         """Agrupa todos os canais do mixer em uso para processar Mute e Solo."""
@@ -1100,6 +1215,9 @@ class OndaKraftApp:
                             elif self.piano_follow_rect.collidepoint(click_x, click_y):
                                 self.piano_auto_follow = not self.piano_auto_follow
                                 clicked_something = True
+                            elif self.piano_config_rect.collidepoint(click_x, click_y):
+                                self.open_synth_config_window()
+                                clicked_something = True
 
                 # Mixer de Canais (Interações)
                 elif self.current_view == 'MIXER':
@@ -1497,6 +1615,12 @@ class OndaKraftApp:
             pygame.draw.rect(self.screen, LINE_COLOR, self.piano_page2_rect, 1)
             p2_lbl = tiny_font.render("COMP. 2", True, p2_txt_color)
             self.screen.blit(p2_lbl, p2_lbl.get_rect(center=self.piano_page2_rect.center))
+
+            # Botão Config do Sintetizador
+            pygame.draw.rect(self.screen, PURPLE, self.piano_config_rect)
+            pygame.draw.rect(self.screen, LINE_COLOR, self.piano_config_rect, 1)
+            config_lbl = tiny_font.render("MOLDAR TIMBRE", True, (255, 255, 255))
+            self.screen.blit(config_lbl, config_lbl.get_rect(center=self.piano_config_rect.center))
 
             # Botão Auto-Follow
             if self.piano_auto_follow:

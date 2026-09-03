@@ -8,14 +8,22 @@ class SoftSynth(BaseSynthesizer):
     def __init__(self):
         """Sintetizador analógico virtual de ondas senoidais suaves com harmônicos harmônicos."""
         super().__init__("SOFT")
+        self.parameters = {
+            "Brilho (Harmônicos)": [0.20, 0.0, 1.0],
+            "Ataque (Attack)": [0.01, 0.001, 0.30]
+        }
 
     def generate_wave(self, freq: float, duration: float, sample_rate: int = 44100,
                       velocity: float = 1.0) -> np.ndarray:
+        brilho = self.parameters["Brilho (Harmônicos)"][0]
+        ataque_val = self.parameters["Ataque (Attack)"][0]
+
         t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
-        # Fundamental + 2º harmônico sutil
-        wave = np.sin(2 * np.pi * freq * t) * 0.75
-        wave += np.sin(2 * np.pi * freq * 2.0 * t) * 0.15
+        # Fundamental + harmônicos secundários controlados pelo Brilho
+        wave = np.sin(2 * np.pi * freq * t) * (1.0 - brilho * 0.4)
+        wave += np.sin(2 * np.pi * freq * 2.0 * t) * brilho * 0.4
+        wave += np.sin(2 * np.pi * freq * 3.0 * t) * brilho * 0.15
 
         fade = np.exp(-5.0 * t)
-        attack = np.minimum(1.0, t / 0.01)  # Suavização do ataque
+        attack = np.minimum(1.0, t / max(0.001, ataque_val))  # Suavização do ataque
         return wave * fade * attack * 0.65 * velocity
